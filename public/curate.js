@@ -915,6 +915,9 @@ async function stepBurstbox(delta) {
 
 function openBurstbox(anchor) {
   state.compareBurstId = anchor.burstId;
+  const stacks = getLoadedStacks();
+  const index = stacks.findIndex((s) => s.burstId === anchor.burstId);
+  state.compareStackIndex = index !== -1 ? index : 0;
   // The clicked card is the single source of truth for this compare session:
   // membership, count, and best pick all come from ITS annotation, so the
   // view can never disagree with the card the user just read — even when a
@@ -947,6 +950,7 @@ function closeBurstbox() {
   state.compareBurstId = null;
   state.compareMembers = [];
   state.compareBestAssetId = null;
+  state.compareStackIndex = null;
   el('burstbox').classList.remove('open');
 }
 
@@ -955,6 +959,24 @@ function renderBurstbox() {
   const members = (state.compareMembers ?? []).map((snap) => live.get(snap.assetId) ?? snap);
   const liveMembers = members.filter((member) => live.has(member.assetId));
   if (liveMembers.length === 0) {
+    // Current stack is fully decided. Advance to the next stack instead of closing.
+    const remainingStacks = getLoadedStacks();
+    if (remainingStacks.length > 0) {
+      const nextIndex = Math.min(state.compareStackIndex ?? 0, remainingStacks.length - 1);
+      openBurstbox(remainingStacks[nextIndex]);
+      return;
+    }
+    if (state.offset < state.total) {
+      loadAssets(true).then(() => {
+        const freshStacks = getLoadedStacks();
+        if (freshStacks.length > 0) {
+          openBurstbox(freshStacks[0]);
+        } else {
+          closeBurstbox();
+        }
+      }).catch(() => closeBurstbox());
+      return;
+    }
     closeBurstbox();
     return;
   }

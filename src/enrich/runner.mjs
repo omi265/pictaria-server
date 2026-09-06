@@ -668,27 +668,42 @@ export async function runBatch({
 }
 
 export async function syncTagDecisions(immich, assetDecisions) {
-  const allTags = [...new Set(Object.values(assetDecisions).flat().map((decision) => decision.tag))].sort();
-  if (allTags.length === 0) {
+  const allAssetIds = Object.keys(assetDecisions);
+  if (allAssetIds.length === 0) {
     return;
   }
-  const tagIds = await ensureImmichTagIds(immich, allTags);
-  for (const [assetId, decisions] of Object.entries(assetDecisions)) {
-    const ids = decisions.map((decision) => tagIds[decision.tag]).filter(Boolean);
-    if (ids.length > 0) {
-      await immich.tagAssetsBulk({ assetIds: [assetId], tagIds: ids });
+  const partitions = typeof immich.partitionAssetIdsByOwner === 'function'
+    ? await immich.partitionAssetIdsByOwner(allAssetIds)
+    : [{ apiKey: immich.apiKey, assetIds: allAssetIds }];
+
+  for (const partition of partitions) {
+    const partitionDecisions = Object.fromEntries(
+      partition.assetIds
+        .map((id) => [id, assetDecisions[id]])
+        .filter(([, d]) => Array.isArray(d) && d.length > 0),
+    );
+    const partitionTags = [...new Set(Object.values(partitionDecisions).flat().map((decision) => decision.tag))].sort();
+    if (partitionTags.length === 0) {
+      continue;
+    }
+    const tagIds = await ensureImmichTagIds(immich, partitionTags, { apiKey: partition.apiKey });
+    for (const [assetId, decisions] of Object.entries(partitionDecisions)) {
+      const ids = decisions.map((decision) => tagIds[decision.tag]).filter(Boolean);
+      if (ids.length > 0) {
+        await immich.tagAssetsBulk({ assetIds: [assetId], tagIds: ids, apiKey: partition.apiKey });
+      }
     }
   }
 }
 
-export async function ensureImmichTagIds(immich, tags) {
-  const existing = tagMap(await immich.listTags());
+export async function ensureImmichTagIds(immich, tags, { apiKey } = {}) {
+  const existing = tagMap(await immich.listTags({ apiKey }));
   const missing = tags.filter((tag) => !(tag in existing));
   if (missing.length > 0) {
-    Object.assign(existing, tagMap(await immich.upsertTags(missing)));
+    Object.assign(existing, tagMap(await immich.upsertTags(missing, { apiKey })));
   }
   for (const tag of tags.filter((candidate) => !(candidate in existing))) {
-    const created = await immich.createTag(tag);
+    const created = await immich.createTag(tag, { apiKey });
     const value = tagValue(created);
     const identifier = tagId(created);
     if (value && identifier) {

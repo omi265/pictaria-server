@@ -504,3 +504,40 @@ test('updateAsset and upsertAssetMetadata retry with partnerApiKey on access rej
   assert.equal(meta.success, true);
   assert.deepEqual(metadataCalls, ['primary-key', 'partner-key']);
 });
+
+test('partitionAssetIdsByOwner splits assets by primary and partner owner', async () => {
+  const client = new ImmichClient({
+    baseUrl: 'http://immich.test',
+    apiKey: 'primary-key',
+    partnerApiKey: 'partner-key',
+    fetchImpl: async (url, options) => {
+      const key = options.headers['x-api-key'];
+      if (url.endsWith('/users/me')) {
+        return new Response(JSON.stringify({ id: key === 'partner-key' ? 'user-partner' : 'user-primary' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('/assets/asset-1')) {
+        return new Response(JSON.stringify({ id: 'asset-1', ownerId: 'user-primary' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('/assets/asset-2')) {
+        return new Response(JSON.stringify({ id: 'asset-2', ownerId: 'user-partner' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('Not found', { status: 404 });
+    },
+  });
+
+  const partitions = await client.partitionAssetIdsByOwner(['asset-1', 'asset-2']);
+  assert.equal(partitions.length, 2);
+  assert.equal(partitions[0].apiKey, 'primary-key');
+  assert.deepEqual(partitions[0].assetIds, ['asset-1']);
+  assert.equal(partitions[1].apiKey, 'partner-key');
+  assert.deepEqual(partitions[1].assetIds, ['asset-2']);
+});

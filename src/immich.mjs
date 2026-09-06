@@ -353,8 +353,64 @@ export class ImmichClient {
     }
   }
 
-  async listTags({ strict = false } = {}) {
-    const response = await this.requestJson('/tags');
+  async getPartnerUserId() {
+    if (!this.partnerApiKey) {
+      return null;
+    }
+    if (this._partnerUserId !== undefined) {
+      return this._partnerUserId;
+    }
+    try {
+      const user = await this.requestJson('/users/me', { apiKey: this.partnerApiKey });
+      this._partnerUserId = user?.id ?? null;
+    } catch {
+      this._partnerUserId = null;
+    }
+    return this._partnerUserId;
+  }
+
+  async partitionAssetIdsByOwner(assetIds, { remoteAssets = null } = {}) {
+    if (!this.partnerApiKey || !Array.isArray(assetIds) || assetIds.length === 0) {
+      return [{ apiKey: this.apiKey, assetIds: Array.isArray(assetIds) ? [...assetIds] : [] }];
+    }
+    const partnerUserId = await this.getPartnerUserId();
+    if (!partnerUserId) {
+      return [{ apiKey: this.apiKey, assetIds: [...assetIds] }];
+    }
+    const assetMap = remoteAssets instanceof Map
+      ? remoteAssets
+      : new Map(Array.isArray(remoteAssets) ? remoteAssets.map((a) => [a.id, a]) : []);
+
+    const primaryIds = [];
+    const partnerIds = [];
+    for (const assetId of assetIds) {
+      let asset = assetMap.get(assetId);
+      if (!asset) {
+        try {
+          asset = await this.getAsset(assetId);
+          assetMap.set(assetId, asset);
+        } catch {
+          // If fetch fails, keep under primary key
+        }
+      }
+      if (asset?.ownerId === partnerUserId) {
+        partnerIds.push(assetId);
+      } else {
+        primaryIds.push(assetId);
+      }
+    }
+    const partitions = [];
+    if (primaryIds.length > 0) {
+      partitions.push({ apiKey: this.apiKey, assetIds: primaryIds, isPartner: false });
+    }
+    if (partnerIds.length > 0) {
+      partitions.push({ apiKey: this.partnerApiKey, assetIds: partnerIds, isPartner: true });
+    }
+    return partitions;
+  }
+
+  async listTags({ strict = false, apiKey = this.apiKey } = {}) {
+    const response = await this.requestJson('/tags', { apiKey });
     if (Array.isArray(response)) {
       return response;
     }
@@ -367,35 +423,36 @@ export class ImmichClient {
     return [];
   }
 
-  async upsertTags(tags) {
+  async upsertTags(tags, { apiKey = this.apiKey } = {}) {
     if (!tags.length) {
       return [];
     }
-    const response = await this.requestJson('/tags', { method: 'PUT', body: { tags } });
+    const response = await this.requestJson('/tags', { method: 'PUT', body: { tags }, apiKey });
     if (Array.isArray(response)) {
       return response;
     }
     return isPlainObject(response) && Array.isArray(response.tags) ? response.tags : [];
   }
 
-  async createTag(tag) {
-    return this.requestJson('/tags', { method: 'POST', body: { name: tag } });
+  async createTag(tag, { apiKey = this.apiKey } = {}) {
+    return this.requestJson('/tags', { method: 'POST', body: { name: tag }, apiKey });
   }
 
-  async tagAssetsBulk({ assetIds, tagIds }) {
+  async tagAssetsBulk({ assetIds, tagIds, apiKey = this.apiKey }) {
     if (!assetIds.length || !tagIds.length) {
       return { count: 0 };
     }
-    return this.requestJson('/tags/assets', { method: 'PUT', body: { assetIds, tagIds } });
+    return this.requestJson('/tags/assets', { method: 'PUT', body: { assetIds, tagIds }, apiKey });
   }
 
-  async untagAssets({ tagId, assetIds }) {
+  async untagAssets({ tagId, assetIds, apiKey = this.apiKey }) {
     if (!assetIds.length) {
       return [];
     }
     const response = await this.requestJson(`/tags/${encodeURIComponent(tagId)}/assets`, {
       method: 'DELETE',
       body: { ids: assetIds },
+      apiKey,
     });
     return Array.isArray(response) ? response : [];
   }

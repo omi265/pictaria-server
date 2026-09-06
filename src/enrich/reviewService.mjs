@@ -487,26 +487,38 @@ export class ReviewService {
     if (job.assetIds.length > SYNC_ASSET_BATCH_SIZE) {
       throw new Error(`Review sync work exceeded the ${SYNC_ASSET_BATCH_SIZE}-asset worker slice.`);
     }
-    const existingTagIds = tagMap(await this.immich.listTags());
+    const partitions = typeof this.immich.partitionAssetIdsByOwner === 'function'
+      ? await this.immich.partitionAssetIdsByOwner(job.assetIds)
+      : [{ apiKey: this.immich.apiKey, assetIds: job.assetIds }];
+
+    for (const partition of partitions) {
+      await this.#pushDecisionPartition(job, partition);
+    }
+    await this.verifyAndRepairTags(job);
+  }
+
+  async #pushDecisionPartition(job, { apiKey, assetIds }) {
+    if (!assetIds || assetIds.length === 0) {
+      return;
+    }
+    const existingTagIds = tagMap(await this.immich.listTags({ apiKey }));
     const tagIds = { ...existingTagIds };
     if (job.add.length > 0) {
-      Object.assign(tagIds, await ensureImmichTagIds(this.immich, job.add));
+      Object.assign(tagIds, await ensureImmichTagIds(this.immich, job.add, { apiKey }));
     }
-    const assetIds = job.assetIds;
     for (const tag of job.remove) {
       const immichTagId = existingTagIds[tag];
       if (immichTagId) {
-        await this.immich.untagAssets({ tagId: immichTagId, assetIds });
+        await this.immich.untagAssets({ tagId: immichTagId, assetIds, apiKey });
       }
     }
     // One mutation event, not one per tag: Immich's per-mutation background
     // jobs race each other and can drop tags applied in rapid succession.
     const addIds = job.add.map((tag) => tagIds[tag]).filter(Boolean);
     if (addIds.length > 0) {
-      await this.immich.tagAssetsBulk({ assetIds, tagIds: addIds });
+      await this.immich.tagAssetsBulk({ assetIds, tagIds: addIds, apiKey });
     }
-    await this.syncAiTagsForAssets(assetIds, tagIds);
-    await this.verifyAndRepairTags(job);
+    await this.syncAiTagsForAssets(assetIds, tagIds, { apiKey });
   }
 
   // Immich can report a successful mutation before every requested addition
@@ -525,8 +537,10 @@ export class ReviewService {
       const missingByAsset = new Map();
       const retainedByAsset = new Map();
       const retainedTagIdsByAsset = new Map();
+      const remoteAssetsById = new Map();
       for (const assetId of job.assetIds) {
         const remoteAsset = await this.immich.getAsset(assetId);
+        remoteAssetsById.set(assetId, remoteAsset);
         if (!Array.isArray(remoteAsset?.tags)) {
           throw new Error(
             'Immich did not expose asset tags. Enable Tags under Account Settings → Features for the API-key account, confirm the key includes tag.read, tag.create, and tag.asset, then retry.',
@@ -568,25 +582,37 @@ export class ReviewService {
       }
       const inconsistentAssets = new Set([...missingByAsset.keys(), ...retainedByAsset.keys()]);
       this.log(`immich tag state is still inconsistent on ${inconsistentAssets.size} asset(s); repairing`);
-      if (retainedByAsset.size > 0) {
-        const assetsByTagId = new Map();
-        for (const [assetId, retainedTagIds] of retainedTagIdsByAsset) {
-          for (const retainedTagId of retainedTagIds) {
-            push(assetsByTagId, retainedTagId, assetId);
+
+      const repairPartitions = typeof this.immich.partitionAssetIdsByOwner === 'function'
+        ? await this.immich.partitionAssetIdsByOwner([...inconsistentAssets], { remoteAssets: remoteAssetsById })
+        : [{ apiKey: this.immich.apiKey, assetIds: [...inconsistentAssets] }];
+
+      for (const { apiKey, assetIds: partitionIds } of repairPartitions) {
+        if (retainedByAsset.size > 0) {
+          const assetsByTagId = new Map();
+          for (const assetId of partitionIds) {
+            const retainedTagIds = retainedTagIdsByAsset.get(assetId) ?? [];
+            for (const retainedTagId of retainedTagIds) {
+              push(assetsByTagId, retainedTagId, assetId);
+            }
+          }
+          for (const [retainedTagId, ids] of assetsByTagId) {
+            await this.immich.untagAssets({ tagId: retainedTagId, assetIds: ids, apiKey });
           }
         }
-        for (const [retainedTagId, assetIds] of assetsByTagId) {
-          await this.immich.untagAssets({ tagId: retainedTagId, assetIds });
-        }
-      }
-      if (missingByAsset.size > 0) {
-        const allMissing = [...new Set([...missingByAsset.values()].flat())].sort();
-        const resolved = await ensureImmichTagIds(this.immich, allMissing);
-        for (const [assetId, missing] of missingByAsset) {
-          await this.immich.tagAssetsBulk({
-            assetIds: [assetId],
-            tagIds: missing.map((tag) => resolved[tag]).filter(Boolean),
-          });
+        const partitionMissingByAsset = partitionIds
+          .filter((id) => missingByAsset.has(id))
+          .map((id) => [id, missingByAsset.get(id)]);
+        if (partitionMissingByAsset.length > 0) {
+          const allMissing = [...new Set(partitionMissingByAsset.flatMap(([, missing]) => missing))].sort();
+          const resolved = await ensureImmichTagIds(this.immich, allMissing, { apiKey });
+          for (const [assetId, missing] of partitionMissingByAsset) {
+            await this.immich.tagAssetsBulk({
+              assetIds: [assetId],
+              tagIds: missing.map((tag) => resolved[tag]).filter(Boolean),
+              apiKey,
+            });
+          }
         }
       }
     }
@@ -594,12 +620,12 @@ export class ReviewService {
 
   // Reconcile ai/* tags in Immich with the local source of truth for the
   // decided assets: parallel reads, then one grouped write per tag.
-  async syncAiTagsForAssets(assetIds, knownTagIds) {
+  async syncAiTagsForAssets(assetIds, knownTagIds, { apiKey = this.immich?.apiKey } = {}) {
     const localTagsByAsset = this.repo.loadAssetTagsFor(assetIds, { prefix: 'ai/' });
     const allLocalTags = [...new Set(assetIds.flatMap((assetId) => localTagsByAsset[assetId] ?? []))].sort();
     const tagIds = { ...knownTagIds };
     if (allLocalTags.length > 0) {
-      Object.assign(tagIds, await ensureImmichTagIds(this.immich, allLocalTags));
+      Object.assign(tagIds, await ensureImmichTagIds(this.immich, allLocalTags, { apiKey }));
     }
 
     const remoteMaps = await mapWithConcurrency(assetIds, REMOTE_FETCH_CONCURRENCY, async (assetId) => {
@@ -631,7 +657,7 @@ export class ReviewService {
     });
 
     for (const [immichTagId, ids] of [...removalsByTagId.entries()].sort()) {
-      await this.immich.untagAssets({ tagId: immichTagId, assetIds: ids });
+      await this.immich.untagAssets({ tagId: immichTagId, assetIds: ids, apiKey });
     }
     // Group assets sharing the same addition set into one bulk call: fewer
     // mutation events per asset means Immich's background jobs cannot race.
@@ -640,7 +666,7 @@ export class ReviewService {
       push(assetsByAdditionSet, JSON.stringify(additions), assetId);
     }
     for (const [signature, ids] of [...assetsByAdditionSet.entries()].sort()) {
-      await this.immich.tagAssetsBulk({ assetIds: ids, tagIds: JSON.parse(signature) });
+      await this.immich.tagAssetsBulk({ assetIds: ids, tagIds: JSON.parse(signature), apiKey });
     }
   }
 }
