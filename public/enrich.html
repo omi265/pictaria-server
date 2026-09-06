@@ -261,6 +261,17 @@
           </span>
         </div>
       </div>
+      <div class="qitem">
+        <div class="qline top">
+          <span class="t">Immich album</span>
+          <select id="enrichAlbumSelect" class="p-input" style="max-width: 320px; font-size: 13px; padding: 2px 6px;">
+            <option value="">Loading albums…</option>
+          </select>
+          <span id="enrichAlbumCount" class="m"></span>
+          <button id="enrichQueueAlbum" class="p-btn quiet" type="button" disabled title="Queue this album without starting immediately">Queue album</button>
+          <button id="enrichStartAlbum" class="p-btn accent" type="button" disabled title="Start enrichment for this album immediately">Start album</button>
+        </div>
+      </div>
       <!-- Photos stuck at the content-failure limit under the selected
            provider/model. Hidden unless there are any; Retry runs exactly
            these photos with the failure cap off for that one run. -->
@@ -717,6 +728,113 @@
           toast(res.message || 'All matching photos in this timeframe are already enriched.');
         } else {
           toast('Enrichment run started');
+        }
+        await refresh();
+        window.dispatchEvent(new CustomEvent('enrich-queue-changed'));
+      } catch (error) {
+        toast(error.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    async function loadAlbums() {
+      const select = el('enrichAlbumSelect');
+      if (!select) return;
+      try {
+        const albums = await api('/api/enrich/albums');
+        select.replaceChildren(
+          Object.assign(document.createElement('option'), { value: '', textContent: 'Choose an album…' }),
+          ...albums.map((album) => {
+            const opt = document.createElement('option');
+            opt.value = album.id;
+            opt.dataset.count = album.assetCount ?? 0;
+            opt.dataset.name = album.albumName;
+            opt.textContent = `${album.albumName} (${(album.assetCount ?? 0).toLocaleString()} photos${album.shared ? ', shared' : ''})`;
+            return opt;
+          })
+        );
+      } catch {
+        select.replaceChildren(
+          Object.assign(document.createElement('option'), { value: '', textContent: 'Could not load albums' })
+        );
+      }
+    }
+
+    el('enrichAlbumSelect')?.addEventListener('change', () => {
+      const select = el('enrichAlbumSelect');
+      const opt = select.selectedOptions[0];
+      const hasAlbum = Boolean(select.value);
+      if (el('enrichQueueAlbum')) el('enrichQueueAlbum').disabled = !hasAlbum;
+      if (el('enrichStartAlbum')) el('enrichStartAlbum').disabled = !hasAlbum;
+      if (el('enrichAlbumCount')) {
+        el('enrichAlbumCount').textContent = hasAlbum && opt?.dataset.count
+          ? `${Number(opt.dataset.count).toLocaleString()} photos`
+          : '';
+      }
+    });
+
+    el('enrichQueueAlbum')?.addEventListener('click', async () => {
+      const select = el('enrichAlbumSelect');
+      const albumId = select.value;
+      if (!albumId) return;
+      const opt = select.selectedOptions[0];
+      const albumName = opt?.dataset.name || 'Album';
+      const count = Number(opt?.dataset.count) || null;
+      const btn = el('enrichQueueAlbum');
+      btn.disabled = true;
+      try {
+        const res = await api('/api/enrich/queue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: `Album: ${albumName}`,
+            filters: { albumIds: [albumId] },
+            estimatedCount: count,
+          }),
+        });
+        toast(res.duplicate ? `"${albumName}" is already queued` : `Queued "${albumName}" (${count ? count.toLocaleString() : 'photos'})`);
+        await loadQueue();
+        window.dispatchEvent(new CustomEvent('enrich-queue-changed'));
+      } catch (error) {
+        toast(error.message, true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    el('enrichStartAlbum')?.addEventListener('click', async () => {
+      const select = el('enrichAlbumSelect');
+      const albumId = select.value;
+      if (!albumId) return;
+      const opt = select.selectedOptions[0];
+      const albumName = opt?.dataset.name || 'Album';
+      const count = Number(opt?.dataset.count) || null;
+      const btn = el('enrichStartAlbum');
+      btn.disabled = true;
+      try {
+        const queueRes = await api('/api/enrich/queue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: `Album: ${albumName}`,
+            filters: { albumIds: [albumId] },
+            estimatedCount: count,
+          }),
+        });
+        const itemId = queueRes.id;
+        if (itemId) {
+          await api(`/api/enrich/queue/${itemId}/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              provider: el('enrichProvider')?.value || undefined,
+              sendToCurate: el('enrichCurate')?.checked !== false,
+              skipAnySuccessful: el('enrichSkip')?.checked !== false,
+              reprocess: el('enrichReprocess')?.checked === true,
+            }),
+          });
+          toast(`Started enrichment for "${albumName}"`);
         }
         await refresh();
         window.dispatchEvent(new CustomEvent('enrich-queue-changed'));
@@ -1628,6 +1746,7 @@
     loadQueue();
     loadRuns();
     loadFailureLimited();
+    loadAlbums();
   </script>
   <script src="/queue-widget.js" defer></script>
 </body>

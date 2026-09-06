@@ -622,12 +622,16 @@ export function normalizeSliceFilters(raw) {
   const ids = (value) => (Array.isArray(value) ? value.map((id) => String(id || '').trim()).filter(Boolean) : []);
   const personIds = ids(raw.personIds);
   const tagIds = ids(raw.tagIds);
+  const albumIds = ids(raw.albumIds || (raw.albumId ? [raw.albumId] : []));
   const assetIds = ids(raw.assetIds).slice(0, 10000);
   if (assetIds.length > 0) {
     filters.assetIds = assetIds;
   }
   if (raw.random === true) {
     filters.random = true;
+  }
+  if (albumIds.length > 0) {
+    filters.albumIds = albumIds;
   }
   if (personIds.length > 0) {
     filters.personIds = personIds;

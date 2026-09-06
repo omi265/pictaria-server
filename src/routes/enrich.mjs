@@ -598,6 +598,27 @@ export function createEnrichRoutes({ review, enrichRunner, taxonomy, repo, requi
       return true;
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/enrich/albums') {
+      if (!requireImmich(response)) {
+        return true;
+      }
+      const albums = await immich.getAlbums();
+      sendJson(
+        response,
+        200,
+        albums
+          .map((album) => ({
+            id: album.id,
+            albumName: album.albumName ?? '',
+            assetCount: typeof album.assetCount === 'number' ? album.assetCount : undefined,
+            shared: Boolean(album.shared),
+          }))
+          .filter((album) => album.id && album.albumName)
+          .sort((left, right) => left.albumName.localeCompare(right.albumName)),
+      );
+      return true;
+    }
+
     // "Send to Enrich" queue: slices wait here until run from the Enrich page.
     if (request.method === 'GET' && url.pathname === '/api/enrich/queue') {
       sendJson(response, 200, queuePagePayload(url.searchParams));
@@ -611,7 +632,7 @@ export function createEnrichRoutes({ review, enrichRunner, taxonomy, repo, requi
         sendError(response, 400, 'invalid_slice', 'At least one slice filter is required.');
         return true;
       }
-      for (const key of ['personIds', 'tagIds', 'cities']) {
+      for (const key of ['personIds', 'tagIds', 'cities', 'albumIds']) {
         if (Array.isArray(filters[key])) {
           filters[key] = [...new Set(filters[key])].sort();
         }

@@ -124,6 +124,9 @@ function makeHarness({
     requireImmich: () => true,
     config: { enrichEnabled: true },
     immich: {
+      async getAlbums() {
+        return [{ id: 'alb-1', albumName: 'Goa Trip', assetCount: 12, shared: true }];
+      },
       async searchMetadata({ page }) {
         state.searches += 1;
         const start = (page - 1) * 2;
@@ -794,6 +797,35 @@ test('DELETE /api/enrich/active/photos/:assetId removes photo from ongoing activ
   assert.deepEqual(state.removedActive, ['p2']);
   assert.deepEqual(state.queue.find((it) => it.id === 88).filters.assetIds, ['p1', 'p3']);
 });
+
+test('GET /api/enrich/albums returns Immich albums and POST /api/enrich/queue queues album', async () => {
+  const { handler, state } = makeHarness();
+  const albumsRes = fakeResponse();
+  await handler(
+    jsonRequest('GET'),
+    albumsRes,
+    new URL('http://x/api/enrich/albums'),
+  );
+  assert.equal(albumsRes.out.statusCode, 200);
+  assert.equal(albumsRes.out.body.length, 1);
+  assert.equal(albumsRes.out.body[0].albumName, 'Goa Trip');
+
+  const queueRes = fakeResponse();
+  await handler(
+    jsonRequest('POST', {
+      title: 'Album: Goa Trip',
+      filters: { albumIds: ['alb-1'] },
+      estimatedCount: 12,
+    }),
+    queueRes,
+    new URL('http://x/api/enrich/queue'),
+  );
+  assert.equal(queueRes.out.statusCode, 201);
+  const queued = state.queue.find((item) => item.title === 'Album: Goa Trip');
+  assert.ok(queued);
+  assert.deepEqual(queued.filters.albumIds, ['alb-1']);
+});
+
 
 
 
