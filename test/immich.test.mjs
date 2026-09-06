@@ -457,5 +457,50 @@ test('getAssetThumbnail and getAssetOriginal retry with partnerApiKey on auth re
   assert.deepEqual(originalCalls, ['primary-key', 'partner-key']);
 });
 
+test('updateAsset and upsertAssetMetadata retry with partnerApiKey on access rejection', async () => {
+  const updateCalls = [];
+  const metadataCalls = [];
+  const client = new ImmichClient({
+    baseUrl: 'http://immich.test',
+    apiKey: 'primary-key',
+    partnerApiKey: 'partner-key',
+    fetchImpl: async (url, options) => {
+      const key = options.headers['x-api-key'];
+      if (url.endsWith('/metadata')) {
+        metadataCalls.push(key);
+        if (key === 'primary-key') {
+          return new Response(JSON.stringify({ message: 'Not found or no asset.update access' }), {
+            status: 400,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (url.includes('/assets/')) {
+        updateCalls.push(key);
+        if (key === 'primary-key') {
+          return new Response(JSON.stringify({ message: 'Not found or no asset.update access' }), {
+            status: 400,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({ id: 'asset-y', description: 'updated' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('Not found', { status: 404 });
+    },
+  });
 
+  const updated = await client.updateAsset('asset-y', { description: 'updated' });
+  assert.equal(updated.description, 'updated');
+  assert.deepEqual(updateCalls, ['primary-key', 'partner-key']);
 
+  const meta = await client.upsertAssetMetadata('asset-y', [{ key: 'k', value: 'v' }]);
+  assert.equal(meta.success, true);
+  assert.deepEqual(metadataCalls, ['primary-key', 'partner-key']);
+});

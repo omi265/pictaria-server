@@ -189,7 +189,22 @@ export class ImmichClient {
   // v2.x has no PATCH route at all. PUT stays until the supported Immich
   // floor is a v3 that publishes PATCH, or Immich schedules PUT's removal.
   async updateAsset(assetId, body) {
-    return this.requestJson(`/assets/${encodeURIComponent(assetId)}`, { method: 'PUT', body });
+    try {
+      return await this.requestJson(`/assets/${encodeURIComponent(assetId)}`, { method: 'PUT', body });
+    } catch (error) {
+      if (
+        this.partnerApiKey &&
+        error instanceof ImmichApiError &&
+        (error.status === 401 || error.status === 403 || (error.status === 400 && /access/i.test(error.message)))
+      ) {
+        return this.requestJson(`/assets/${encodeURIComponent(assetId)}`, {
+          method: 'PUT',
+          body,
+          apiKey: this.partnerApiKey,
+        });
+      }
+      throw error;
+    }
   }
 
   async getAssetMetadataByKey(assetId, key) {
@@ -209,10 +224,25 @@ export class ImmichClient {
   }
 
   async upsertAssetMetadata(assetId, items) {
-    return this.requestJson(`/assets/${encodeURIComponent(assetId)}/metadata`, {
-      method: 'PUT',
-      body: { items },
-    });
+    try {
+      return await this.requestJson(`/assets/${encodeURIComponent(assetId)}/metadata`, {
+        method: 'PUT',
+        body: { items },
+      });
+    } catch (error) {
+      if (
+        this.partnerApiKey &&
+        error instanceof ImmichApiError &&
+        (error.status === 401 || error.status === 403 || (error.status === 400 && /access/i.test(error.message)))
+      ) {
+        return this.requestJson(`/assets/${encodeURIComponent(assetId)}/metadata`, {
+          method: 'PUT',
+          body: { items },
+          apiKey: this.partnerApiKey,
+        });
+      }
+      throw error;
+    }
   }
 
   async searchSmart(body) {
