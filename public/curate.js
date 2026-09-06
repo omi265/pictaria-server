@@ -134,8 +134,11 @@ function updateLoadMoreControls() {
   const hasMore = state.offset < state.total;
   document.querySelectorAll('[data-load-more]').forEach((button) => {
     button.disabled = state.loading || !hasMore;
+    button.textContent = state.loading ? 'Loading…' : 'Load more';
   });
   el('loadMoreBottomRow').hidden = state.assets.length === 0 || !hasMore;
+  const sentinel = el('scrollSentinel');
+  if (sentinel) sentinel.hidden = !hasMore;
 }
 
 function renderTabs(payload) {
@@ -1373,8 +1376,37 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 }
 
+function initInfiniteScroll() {
+  const sentinel = el('scrollSentinel');
+  if (window.IntersectionObserver && sentinel) {
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && !state.loading && state.offset < state.total) {
+          loadAssets(true);
+        }
+      }
+    }, { rootMargin: '600px' });
+    observer.observe(sentinel);
+  }
+
+  let scrollThrottle = null;
+  window.addEventListener('scroll', () => {
+    if (scrollThrottle || state.loading || state.offset >= state.total) return;
+    scrollThrottle = setTimeout(() => {
+      scrollThrottle = null;
+      if (state.loading || state.offset >= state.total) return;
+      const scrollRemaining = document.documentElement.scrollHeight - (window.innerHeight + window.scrollY);
+      if (scrollRemaining < 800) {
+        loadAssets(true);
+      }
+    }, 150);
+  }, { passive: true });
+}
+
 async function boot() {
+  initInfiniteScroll();
   await loadAssets(false);
 }
 
 boot();
+
