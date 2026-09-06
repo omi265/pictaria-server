@@ -100,6 +100,9 @@ export function loadConfig(env = process.env) {
     // containers can lower it. Clamped to [8MB, 2GB].
     curateRefereeGroupBudgetBytes:
       clamp(parseInteger(env.REFEREE_GROUP_BUDGET_MB, 96), 8, 2048) * 1024 * 1024,
+    // Primary user ('Me') designation: recognized Immich person ID and name
+    curatePrimaryPersonId: env.CURATE_PRIMARY_PERSON_ID || env.PRIMARY_PERSON_ID || '',
+    curatePrimaryPersonName: env.CURATE_PRIMARY_PERSON_NAME || env.PRIMARY_PERSON_NAME || '',
     // Also off by default: copying enrichment captions into Immich's
     // description field mutates the user's Immich library. It fills empty
     // descriptions or updates our own earlier writes after a final read; the

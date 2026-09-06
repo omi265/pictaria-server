@@ -42,7 +42,7 @@ export class ImmichClient {
     return this.requestJson('/search/metadata', { method: 'POST', body });
   }
 
-  async listImageAssets({ limit = 25, pageSize = 100, offset = 0, shouldStop = () => false } = {}) {
+  async listImageAssets({ limit = 25, pageSize = 100, offset = 0, takenAfter = null, takenBefore = null, shouldStop = () => false } = {}) {
     assertBoundedInteger(limit, 0, MAX_LIST_ASSETS, 'limit');
     assertBoundedInteger(offset, 0, MAX_LIST_OFFSET, 'offset');
     assertBoundedInteger(pageSize, 1, MAX_SEARCH_PAGE_SIZE, 'pageSize');
@@ -76,6 +76,8 @@ export class ImmichClient {
         // stack-child assets, wasting enrichment spend on duplicates.
         visibility: 'timeline',
         withExif: true,
+        ...(takenAfter ? { takenAfter } : {}),
+        ...(takenBefore ? { takenBefore } : {}),
       });
       let pageAssets = strictSearchPageAssets(response, pageSize);
       budget.recordItems(pageAssets.length);
@@ -94,6 +96,49 @@ export class ImmichClient {
       });
       if (parsedPage === null) break;
       page = parsedPage;
+    }
+
+    return assets.slice(0, limit);
+  }
+
+  async listRandomImageAssets({ limit = 25, takenAfter = null, takenBefore = null, shouldStop = () => false } = {}) {
+    assertBoundedInteger(limit, 0, MAX_LIST_ASSETS, 'limit');
+    if (limit === 0 || shouldStop()) return [];
+
+    const assets = [];
+    const seen = new Set();
+    let consecutiveDuplicates = 0;
+    const maxConsecutiveDuplicates = 3;
+
+    while (assets.length < limit) {
+      if (shouldStop()) break;
+      const count = Math.min(Math.max(1, limit - assets.length), 250);
+      const query = {
+        count,
+        ...(takenAfter ? { takenAfter } : {}),
+        ...(takenBefore ? { takenBefore } : {}),
+      };
+      const response = await this.searchRandom(query);
+      const imageAssets = extractImageAssets(response);
+      if (imageAssets.length === 0) {
+        break;
+      }
+      let addedAny = false;
+      for (const asset of imageAssets) {
+        if (!asset?.id || seen.has(asset.id)) continue;
+        seen.add(asset.id);
+        assets.push(asset);
+        addedAny = true;
+        if (assets.length >= limit) break;
+      }
+      if (!addedAny) {
+        consecutiveDuplicates += 1;
+        if (consecutiveDuplicates >= maxConsecutiveDuplicates) {
+          break;
+        }
+      } else {
+        consecutiveDuplicates = 0;
+      }
     }
 
     return assets.slice(0, limit);

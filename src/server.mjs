@@ -166,11 +166,15 @@ const immich = new ImmichClient({
   apiKey: config.immichApiKey,
   timeoutMs: config.requestTimeoutMs,
 });
+const insightsRepo = new InsightsRepository(config.insights.dbPath);
+// Settings are already loaded; mirror the user's location groups into the
+// insights DB so city aggregates relabel them from the first query.
+insightsRepo.setLocationGroups(config.insights.locationGroups);
 const review = new ReviewService({ repo, immich, taxonomy, config, log: (message) => console.log(`[Pictaria] ${message}`) });
 const captionWriteback = new CaptionWritebackService({ repo, immich, config, log: (message) => console.log(`[Pictaria] ${message}`) });
-const enrichRunner = new EnrichJobRunner({ repo, immich, taxonomy, config });
+const enrichRunner = new EnrichJobRunner({ repo, immich, taxonomy, config, insightsRepo });
 const enrichScheduler = new EnrichScheduler({ runner: enrichRunner, repo, config });
-const referee = new RefereeService({ repo, immich, review, enrichRunner, config, log: (message) => console.log(`[Pictaria] ${message}`) });
+const referee = new RefereeService({ repo, immich, review, enrichRunner, config, insightsRepo, log: (message) => console.log(`[Pictaria] ${message}`) });
 const albumStore = new SmartAlbumStore(config.albums.dataFile, { installationSecret });
 const albumScheduler = new SmartAlbumScheduler({ immich, store: albumStore, config: config.albums, enrichRepo: repo });
 const frameHub = createFrameHub();
@@ -178,10 +182,6 @@ const frameLedger = createFrameLedger({ dbPath: config.frame.dbPath });
 const voiceMetrics = createVoiceMetrics({ dbPath: config.frame.dbPath });
 const wakeWordModels = new WakeWordModelStore(config.wakeWordModelsDir);
 await wakeWordModels.load();
-const insightsRepo = new InsightsRepository(config.insights.dbPath);
-// Settings are already loaded; mirror the user's location groups into the
-// insights DB so city aggregates relabel them from the first query.
-insightsRepo.setLocationGroups(config.insights.locationGroups);
 const insightsCollector = new InsightsCollector({
   repo: insightsRepo,
   immich,

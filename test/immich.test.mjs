@@ -300,3 +300,51 @@ test('listTags keeps legacy tolerant reads but offers fail-closed Smart Album re
     (error) => error?.code === 'invalid_upstream_pagination' && /invalid response/.test(error.message),
   );
 });
+
+test('listRandomImageAssets filters image types and deduplicates', async () => {
+  let callCount = 0;
+  const client = new ImmichClient({
+    baseUrl: 'http://immich.test',
+    apiKey: 'test-key',
+    fetchImpl: async () => {
+      callCount += 1;
+      return new Response(
+        JSON.stringify([
+          { id: 'img1', type: 'IMAGE' },
+          { id: 'vid1', type: 'VIDEO' },
+          { id: 'img2', type: 'IMAGE' },
+        ]),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    },
+  });
+
+  const result = await client.listRandomImageAssets({ limit: 2 });
+  assert.equal(result.length, 2);
+  assert.deepEqual(result.map((a) => a.id), ['img1', 'img2']);
+  assert.equal(callCount, 1);
+});
+
+test('listRandomImageAssets forwards takenAfter and takenBefore', async () => {
+  let capturedBody = null;
+  const client = new ImmichClient({
+    baseUrl: 'http://immich.test',
+    apiKey: 'test-key',
+    fetchImpl: async (url, options) => {
+      capturedBody = JSON.parse(options.body);
+      return new Response(
+        JSON.stringify([{ id: 'img1', type: 'IMAGE' }]),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    },
+  });
+
+  const takenAfter = '2026-01-01T00:00:00.000Z';
+  const takenBefore = '2026-06-01T00:00:00.000Z';
+  const result = await client.listRandomImageAssets({ limit: 1, takenAfter, takenBefore });
+  assert.equal(result.length, 1);
+  assert.equal(capturedBody.takenAfter, takenAfter);
+  assert.equal(capturedBody.takenBefore, takenBefore);
+});
+
+

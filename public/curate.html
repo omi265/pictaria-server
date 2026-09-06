@@ -35,6 +35,17 @@
     .stack-edge.e2 { margin: 0 18px; opacity: 0.7; }
     .stack-edge.e1 { margin: 0 9px; opacity: 0.9; }
     .p-card.stack { border-color: var(--p-strong-line, var(--p-line)); }
+    /* Unstacked burst members: visible accent connecting photos from the same stack */
+    .p-card.unstacked-stack-member {
+      border-top: 3px solid var(--p-accent);
+      position: relative;
+    }
+    .p-card.unstacked-stack-member.referee-judged {
+      border-top-color: rgba(251, 191, 36, 0.95);
+    }
+    .p-card.unstacked-stack-member.unstacked-stack-lead {
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+    }
     /* "Keep, skip N" always gets its own full-width, centered row. */
     .card-actions .keep-best { grid-column: 1 / -1; }
     /* Compare view: all members of one group side by side */
@@ -178,6 +189,7 @@
         <button class="p-tab" data-group="stacks">Stacks</button>
         <button class="p-tab" data-group="singles">Singles</button>
       </nav>
+      <button id="toggleStackBtn" class="p-btn quiet" type="button" title="Temporarily unstack photos to view each photo individually" style="font-size: 12px; height: 26px; padding: 0 10px;">Unstack all</button>
       <label class="p-row" style="gap: 7px"><input id="selectVisible" type="checkbox"> Check visible</label>
       <span id="meta" class="p-muted"></span>
       <span id="metaEnrich" style="color: var(--p-danger); font-size: 12px; margin-left: 6px" hidden>Note: Enrich is running — Stacks may change as photos are added.</span>
@@ -264,5 +276,6 @@
     <button id="toastUndo" class="p-btn quiet toast-undo" type="button" hidden>Undo (Z)</button>
   </div>
   <script src="/curate.js"></script>
+  <script src="/queue-widget.js" defer></script>
 </body>
 </html>

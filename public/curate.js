@@ -16,6 +16,7 @@ const state = {
   syncPolling: null,
   loadingPromise: null,
   immichUrl: null,
+  unstacked: false,
   // Decisions made this session (per view load): appended pages are filtered
   // against this so a fetch that raced a decision can't resurrect the photo.
   recentlyDecided: new Set(),
@@ -103,6 +104,7 @@ async function doLoadAssets(append) {
     el('bulkUndo').hidden = state.view !== 'decided';
     // Stacks/singles passes don't apply to the decided list.
     el('groupFilter').hidden = state.view === 'decided';
+    if (el('toggleStackBtn')) el('toggleStackBtn').hidden = state.view === 'decided';
   } catch (error) {
     // A low-water append can fail after the decision itself succeeded. Keep
     // that decision's short Undo window alive while reporting the load error.
@@ -172,20 +174,43 @@ function renderGrid() {
       if (renderedBursts.has(asset.burstId)) continue;
       renderedBursts.add(asset.burstId);
       const members = state.assets.filter((a) => a.burstId === asset.burstId);
-      units.push({
-        render: () => (members.length > 1 ? renderStackCard(members) : renderCard(members[0])),
-        // Referee-judged stacks lead the grid — they're the ones with a
-        // verdict waiting, so they shouldn't have to be hunted for.
-        gold: members.length > 1 && members.some((m) => m.burstPickSource === 'referee'),
-      });
+      const isGold = members.length > 1 && members.some((m) => m.burstPickSource === 'referee');
+      if (state.unstacked) {
+        // Unstacked view: keep all members of the same stack together sequentially
+        const sortedMembers = [...members].sort((a, b) => {
+          if (a.assetId === a.burstBestAssetId) return -1;
+          if (b.assetId === b.burstBestAssetId) return 1;
+          return 0;
+        });
+        units.push({
+          cards: sortedMembers.map((m, idx) => {
+            const card = renderCard(m);
+            if (members.length > 1) {
+              card.classList.add('unstacked-stack-member');
+              if (isGold) card.classList.add('referee-judged');
+              if (idx === 0) card.classList.add('unstacked-stack-lead');
+              card.dataset.burstId = m.burstId;
+            }
+            return card;
+          }),
+          gold: isGold,
+        });
+      } else {
+        units.push({
+          cards: [members.length > 1 ? renderStackCard(members) : renderCard(members[0])],
+          gold: isGold,
+        });
+      }
     } else {
-      units.push({ render: () => renderCard(asset), gold: false });
+      units.push({ cards: [renderCard(asset)], gold: false });
     }
   }
   units.sort((a, b) => Number(b.gold) - Number(a.gold)); // stable: keeps queue order within each half
   for (const unit of units) {
-    grid.append(unit.render());
-    state.cardCount += 1;
+    for (const card of unit.cards) {
+      grid.append(card);
+      state.cardCount += 1;
+    }
   }
   updateMeta();
 }
@@ -328,6 +353,14 @@ function renderCard(asset) {
         : asset.burstBestAssetId
           ? 'Part of a Stack whose other photos are in another tab or already decided; the ★ photo is the suggested keeper'
           : 'Part of a Stack whose other photos are in another tab or already decided (no signal to suggest a best pick)';
+    }
+    if (state.unstacked) {
+      badge.style.cursor = 'pointer';
+      badge.title += ' (click to compare all photos of this moment side by side)';
+      badge.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openBurstbox(asset);
+      });
     }
     thumbWrap.append(badge);
   }
@@ -1153,6 +1186,19 @@ document.querySelectorAll('#groupFilter .p-tab').forEach((button) => {
     loadAssetsFresh();
   });
 });
+const toggleStackBtn = el('toggleStackBtn');
+if (toggleStackBtn) {
+  toggleStackBtn.addEventListener('click', () => {
+    state.unstacked = !state.unstacked;
+    toggleStackBtn.textContent = state.unstacked ? 'Restack' : 'Unstack all';
+    toggleStackBtn.title = state.unstacked
+      ? 'Restore stack grouping'
+      : 'Temporarily unstack photos to view each photo individually';
+    toggleStackBtn.classList.toggle('accent', state.unstacked);
+    toggleStackBtn.classList.toggle('quiet', !state.unstacked);
+    renderGrid();
+  });
+}
 el('selectVisible').addEventListener('change', () => {
   const check = el('selectVisible').checked;
   for (const asset of state.assets) check ? state.selected.add(asset.assetId) : state.selected.delete(asset.assetId);

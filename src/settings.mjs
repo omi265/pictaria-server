@@ -543,6 +543,22 @@ const CURATE_FIELDS = {
       config.curateRefereeModel = value;
     },
   },
+  primaryPersonId: {
+    env: 'PRIMARY_PERSON_ID',
+    label: "Primary person ('Me') ID",
+    read: (config) => config.curatePrimaryPersonId,
+    apply: (config, value) => {
+      config.curatePrimaryPersonId = String(value ?? '').trim();
+    },
+  },
+  primaryPersonName: {
+    env: 'PRIMARY_PERSON_NAME',
+    label: "Primary person ('Me') name",
+    read: (config) => config.curatePrimaryPersonName,
+    apply: (config, value) => {
+      config.curatePrimaryPersonName = String(value ?? '').trim();
+    },
+  },
 };
 
 // The supporter key rides the settings store: entry is a normal settings
