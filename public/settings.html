@@ -639,6 +639,7 @@
       server: [
         { key: 'immichBaseUrl', type: 'text', placeholder: 'http://192.168.1.10:2283', desc: 'Your Immich server, as reachable from the machine running Pictaria.' },
         { key: 'immichApiKey', type: 'secret', desc: 'Create one in Immich under Account Settings → API Keys.' },
+        { key: 'immichPartnerApiKey', type: 'secret', desc: 'Optional partner API key. Used to resolve people, faces, and tags on partner and shared assets.' },
         { key: 'immichPublicUrl', type: 'text', placeholder: 'defaults to the server URL', desc: 'Only needed if your browser reaches Immich at a different address (e.g. behind a reverse proxy) — used for the "Open in Immich" links.' },
       ],
       // Presentation-only grouping: sourceSection keeps the persisted/API

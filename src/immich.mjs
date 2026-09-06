@@ -31,15 +31,16 @@ export class ImmichApiError extends Error {
 }
 
 export class ImmichClient {
-  constructor({ baseUrl, apiKey, timeoutMs = 60000, fetchImpl = fetch } = {}) {
+  constructor({ baseUrl, apiKey, partnerApiKey = '', timeoutMs = 60000, fetchImpl = fetch } = {}) {
     this.baseUrl = normalizeBaseUrl(baseUrl ?? '');
     this.apiKey = apiKey;
+    this.partnerApiKey = partnerApiKey;
     this.timeoutMs = timeoutMs;
     this.fetchImpl = fetchImpl;
   }
 
-  async searchMetadata(body) {
-    return this.requestJson('/search/metadata', { method: 'POST', body });
+  async searchMetadata(body, { apiKey = this.apiKey } = {}) {
+    return this.requestJson('/search/metadata', { method: 'POST', body, apiKey });
   }
 
   async listImageAssets({ limit = 25, pageSize = 100, offset = 0, takenAfter = null, takenBefore = null, shouldStop = () => false } = {}) {
@@ -144,9 +145,40 @@ export class ImmichClient {
     return assets.slice(0, limit);
   }
 
-  async getAsset(assetId) {
+  async getAsset(assetId, { resolvePeople = false } = {}) {
     const response = await this.requestJson(`/assets/${encodeURIComponent(assetId)}`);
-    return isPlainObject(response) ? response : { id: assetId };
+    const asset = isPlainObject(response) ? response : { id: assetId };
+
+    // Immich resets people to [] for non-owner callers on GET /assets/:id.
+    // If people is empty and a partner API key is configured, re-query with the partner key.
+    if (this.partnerApiKey && (!Array.isArray(asset.people) || asset.people.length === 0)) {
+      try {
+        const partnerAsset = await this.requestJson(`/assets/${encodeURIComponent(assetId)}`, {
+          apiKey: this.partnerApiKey,
+        });
+        if (partnerAsset && Array.isArray(partnerAsset.people) && partnerAsset.people.length > 0) {
+          asset.people = partnerAsset.people;
+        }
+        if ((!Array.isArray(asset.tags) || asset.tags.length === 0) && Array.isArray(partnerAsset?.tags) && partnerAsset.tags.length > 0) {
+          asset.tags = partnerAsset.tags;
+        }
+      } catch {
+        // Keep primary response if partner request fails
+      }
+    } else if (resolvePeople && (!Array.isArray(asset.people) || asset.people.length === 0)) {
+      // Optional fallback when partner key is not configured: Immich search joins asset_face directly.
+      try {
+        const searchResult = await this.searchMetadata({ id: assetId, withPeople: true });
+        const match = searchResult?.assets?.items?.[0];
+        if (match && Array.isArray(match.people) && match.people.length > 0) {
+          asset.people = match.people;
+        }
+      } catch {
+        // Keep primary response if search fallback fails
+      }
+    }
+
+    return asset;
   }
 
   // Same endpoint the Immich web UI uses to edit an asset (e.g. its
@@ -261,17 +293,34 @@ export class ImmichClient {
   // ResponseTooLargeError instead of buffering. Without it the default
   // response ceiling applies.
   async getAssetThumbnail(assetId, size = 'preview', { maxBytes } = {}) {
-    return this.requestBytes(
-      `/assets/${encodeURIComponent(assetId)}/thumbnail?size=${encodeURIComponent(size)}`,
-      maxBytes === undefined ? {} : { maxBytes },
-    );
+    try {
+      return await this.requestBytes(
+        `/assets/${encodeURIComponent(assetId)}/thumbnail?size=${encodeURIComponent(size)}`,
+        maxBytes === undefined ? {} : { maxBytes },
+      );
+    } catch (error) {
+      if (this.partnerApiKey && error instanceof ImmichApiError && (error.status === 401 || error.status === 403)) {
+        return this.requestBytes(
+          `/assets/${encodeURIComponent(assetId)}/thumbnail?size=${encodeURIComponent(size)}`,
+          { ...(maxBytes === undefined ? {} : { maxBytes }), apiKey: this.partnerApiKey },
+        );
+      }
+      throw error;
+    }
   }
 
   // Callers with a tighter budget than the original-class default (e.g. the
   // referee's per-image ceiling) pass their own maxBytes; past it the download
   // aborts with a ResponseTooLargeError instead of buffering.
   async getAssetOriginal(assetId, { maxBytes = ORIGINAL_MAX_RESPONSE_BYTES } = {}) {
-    return this.requestBytes(`/assets/${encodeURIComponent(assetId)}/original`, { maxBytes });
+    try {
+      return await this.requestBytes(`/assets/${encodeURIComponent(assetId)}/original`, { maxBytes });
+    } catch (error) {
+      if (this.partnerApiKey && error instanceof ImmichApiError && (error.status === 401 || error.status === 403)) {
+        return this.requestBytes(`/assets/${encodeURIComponent(assetId)}/original`, { maxBytes, apiKey: this.partnerApiKey });
+      }
+      throw error;
+    }
   }
 
   async listTags({ strict = false } = {}) {
@@ -321,18 +370,19 @@ export class ImmichClient {
     return Array.isArray(response) ? response : [];
   }
 
-  async requestJson(path, { method = 'GET', body = null } = {}) {
-    const { buffer } = await this.#request(path, { method, body, accept: 'application/json' });
+  async requestJson(path, { method = 'GET', body = null, apiKey = this.apiKey } = {}) {
+    const { buffer } = await this.#request(path, { method, body, accept: 'application/json', apiKey });
     const text = buffer.toString('utf8');
     return text ? JSON.parse(text) : null;
   }
 
-  async requestBytes(path, { maxBytes = DEFAULT_MAX_RESPONSE_BYTES } = {}) {
+  async requestBytes(path, { maxBytes = DEFAULT_MAX_RESPONSE_BYTES, apiKey = this.apiKey } = {}) {
     const { buffer, contentType } = await this.#request(path, {
       method: 'GET',
       body: null,
       accept: 'image/*, application/octet-stream',
       maxBytes,
+      apiKey,
     });
     return {
       data: buffer,
@@ -345,7 +395,7 @@ export class ImmichClient {
   // of hanging the caller forever. The body is consumed here, inside the
   // timer's window, bounded by maxBytes (a runaway body aborts instead of
   // exhausting process memory), and returned fully buffered.
-  async #request(path, { method, body, accept, maxBytes = DEFAULT_MAX_RESPONSE_BYTES }) {
+  async #request(path, { method, body, accept, maxBytes = DEFAULT_MAX_RESPONSE_BYTES, apiKey = this.apiKey }) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     const url = appendHttpUrlPath(this.baseUrl, `/api/${String(path).replace(/^\/+/, '')}`);
@@ -357,12 +407,12 @@ export class ImmichClient {
         headers: {
           Accept: accept,
           'Content-Type': 'application/json',
-          'x-api-key': this.apiKey,
+          'x-api-key': apiKey,
         },
         body: body === null ? undefined : JSON.stringify(body),
       });
       if (!response.ok) {
-        throw new ImmichApiError(await readErrorMessage(response, this.apiKey), response.status);
+        throw new ImmichApiError(await readErrorMessage(response, apiKey), response.status);
       }
       // Injected fetchImpl doubles without a body stream (tests) read whole.
       const buffer = typeof response.body?.getReader === 'function'

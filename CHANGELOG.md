@@ -12,6 +12,7 @@ All notable changes to Pictaria Server are documented here. This project follows
 - Library sweeps now resolve candidate photos upfront into explicit queue items, allowing full photo-level preview and individual removal before or during execution.
 - Rich contextual enrichment prompts and referee evaluation using reverse geocoding, recognized Immich people, and close personal connections.
 - Support for primary user designation in Curate settings to prioritize moments featuring you and your close companions.
+- Optional Immich partner API key support (`IMMICH_PARTNER_API_KEY` and Settings UI) to retrieve complete face, people, and tag metadata on partner-owned or shared assets.
 
 ## 1.1.0 - 2026-09-03
 

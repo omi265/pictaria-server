@@ -124,6 +124,7 @@ settingsStore.onApplied = () => {
   for (const client of [immich, immichPingClient]) {
     client.baseUrl = config.immichBaseUrl;
     client.apiKey = config.immichApiKey;
+    client.partnerApiKey = config.immichPartnerApiKey;
   }
   immichPing = emptyImmichStatus();
   enrichScheduler.settingsChanged();
@@ -164,6 +165,7 @@ settingsStore.onUpdated = (fields) => activityLog.settingsChanged({ fields });
 const immich = new ImmichClient({
   baseUrl: config.immichBaseUrl,
   apiKey: config.immichApiKey,
+  partnerApiKey: config.immichPartnerApiKey,
   timeoutMs: config.requestTimeoutMs,
 });
 const insightsRepo = new InsightsRepository(config.insights.dbPath);

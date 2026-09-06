@@ -32,6 +32,7 @@ export function loadConfig(env = process.env) {
     // to the server-side URL, which is right whenever both are on the same LAN.
     immichPublicUrl: normalizeBaseUrl(env.IMMICH_PUBLIC_URL || env.IMMICH_BASE_URL || ''),
     immichApiKey: env.IMMICH_API_KEY || '',
+    immichPartnerApiKey: env.IMMICH_PARTNER_API_KEY || '',
     requestTimeoutMs: parseInteger(env.REQUEST_TIMEOUT_MS, 60000),
     databasePath: resolvePath(env.DATABASE_PATH, join(ROOT_DIR, 'data', 'enrichment.sqlite')),
     settingsPath,
