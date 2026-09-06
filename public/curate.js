@@ -668,13 +668,30 @@ function removeDecided(assetIds) {
 }
 
 function updateBulkbar() {
-  el('bulkbar').hidden = state.selected.size === 0;
-  el('selectedCount').textContent = `${state.selected.size} selected`;
+  const count = state.selected.size;
+  const isSelected = count > 0;
+  if (el('bulkbar')) el('bulkbar').hidden = !isSelected;
+  if (el('toolbarBulkActions')) el('toolbarBulkActions').hidden = !isSelected;
+  const countText = `${count} selected`;
+  if (el('selectedCount')) el('selectedCount').textContent = countText;
+  if (el('toolbarSelectedCount')) el('toolbarSelectedCount').textContent = countText;
+
   const visible = state.assets.map((a) => a.assetId);
   const checked = visible.filter((id) => state.selected.has(id)).length;
   const box = el('selectVisible');
-  box.checked = visible.length > 0 && checked === visible.length;
-  box.indeterminate = checked > 0 && checked < visible.length;
+  if (box) {
+    box.checked = visible.length > 0 && checked === visible.length;
+    box.indeterminate = checked > 0 && checked < visible.length;
+  }
+}
+
+function clearSelection() {
+  state.selected.clear();
+  for (const box of grid.querySelectorAll('.card-check')) {
+    box.checked = false;
+    box.closest('.p-card')?.classList.remove('selected');
+  }
+  updateBulkbar();
 }
 
 // ---------- Lightbox ----------
@@ -837,6 +854,65 @@ function lightboxKeepBest() {
 }
 
 // ---------- Compare view (one "same moment" group side by side) ----------
+function getLoadedStacks() {
+  const seen = new Set();
+  const stacks = [];
+  for (const asset of state.assets) {
+    if (!asset.burstId || state.view === 'decided') continue;
+    if (seen.has(asset.burstId)) continue;
+    seen.add(asset.burstId);
+    const members = state.assets.filter((a) => a.burstId === asset.burstId);
+    if (members.length > 1) {
+      const best = members.find((m) => m.assetId === m.burstBestAssetId) ?? members[0];
+      const isGold = members.some((m) => m.burstPickSource === 'referee');
+      stacks.push({ rep: best, gold: isGold, burstId: asset.burstId });
+    }
+  }
+  if (state.sort === 'default') {
+    stacks.sort((a, b) => Number(b.gold) - Number(a.gold));
+  }
+  return stacks.map((s) => s.rep);
+}
+
+function updateBurstboxNav() {
+  const stacks = getLoadedStacks();
+  const index = stacks.findIndex((s) => s.burstId === state.compareBurstId);
+  const prevBtn = el('bbPrevStack');
+  const nextBtn = el('bbNextStack');
+  if (!prevBtn || !nextBtn) return;
+  if (index === -1) {
+    prevBtn.disabled = true;
+    nextBtn.disabled = true;
+    return;
+  }
+  prevBtn.disabled = index <= 0;
+  prevBtn.title = index > 0 ? `Previous stack (${index} of ${stacks.length}) [←]` : 'No previous stack';
+
+  const hasMore = index < stacks.length - 1 || state.offset < state.total;
+  nextBtn.disabled = !hasMore;
+  nextBtn.title = index < stacks.length - 1
+    ? `Next stack (${index + 2} of ${stacks.length}) [→]`
+    : (state.offset < state.total ? 'Load next stack [→]' : 'No more stacks');
+}
+
+async function stepBurstbox(delta) {
+  const stacks = getLoadedStacks();
+  const currentIndex = stacks.findIndex((s) => s.burstId === state.compareBurstId);
+  if (currentIndex === -1) return;
+  const targetIndex = currentIndex + delta;
+  if (targetIndex >= 0 && targetIndex < stacks.length) {
+    openBurstbox(stacks[targetIndex]);
+    return;
+  }
+  if (targetIndex >= stacks.length && state.offset < state.total) {
+    await loadAssets(true);
+    const updatedStacks = getLoadedStacks();
+    if (updatedStacks.length > currentIndex + 1) {
+      openBurstbox(updatedStacks[currentIndex + 1]);
+    }
+  }
+}
+
 function openBurstbox(anchor) {
   state.compareBurstId = anchor.burstId;
   // The clicked card is the single source of truth for this compare session:
@@ -864,6 +940,7 @@ function openBurstbox(anchor) {
   );
   renderBurstbox();
   el('burstbox').classList.add('open');
+  updateBurstboxNav();
 }
 
 function closeBurstbox() {
@@ -884,11 +961,16 @@ function renderBurstbox() {
   // The best pick is pinned at open time (the clicked card's ★): member rows
   // refreshed by a later append may carry a different generation's pick.
   const best = liveMembers.find((m) => m.assetId === state.compareBestAssetId) ?? null;
+  const stacks = getLoadedStacks();
+  const stackIdx = stacks.findIndex((s) => s.burstId === state.compareBurstId);
+  const stackNote = stackIdx !== -1 ? `Stack ${stackIdx + 1} of ${stacks.length} · ` : '';
+
   el('bbTitle').textContent = liveMembers.length === members.length
-    ? `Same moment · ${members.length} photo${members.length === 1 ? '' : 's'}`
-    : `Same moment · ${liveMembers.length} of ${members.length} photos left`;
+    ? `${stackNote}Same moment · ${members.length} photo${members.length === 1 ? '' : 's'}`
+    : `${stackNote}Same moment · ${liveMembers.length} of ${members.length} photos left`;
   const dated = members.find((member) => member.capturedAt);
   el('bbSub').textContent = dated ? new Date(dated.capturedAt).toLocaleString() : '';
+  updateBurstboxNav();
   // Header buttons hide via visibility so the head never changes height
   // (or wrap layout) mid-session as decisions land.
   const headButton = (id, show, label, onclick) => {
@@ -1277,6 +1359,10 @@ document.querySelectorAll('[data-lb]').forEach((button) => {
 // so it needs its own wiring — the K shortcut goes through the same handler.
 el('lbKeepBest').addEventListener('click', lightboxKeepBest);
 el('bbClose').addEventListener('click', closeBurstbox);
+el('bbPrevStack')?.addEventListener('click', () => stepBurstbox(-1));
+el('bbNextStack')?.addEventListener('click', () => stepBurstbox(1));
+el('toolbarClearBtn')?.addEventListener('click', clearSelection);
+el('bulkClear')?.addEventListener('click', clearSelection);
 el('burstbox').addEventListener('click', (event) => {
   if (event.target === el('burstbox')) closeBurstbox();
 });
@@ -1298,13 +1384,35 @@ document.addEventListener('keydown', (event) => {
     return;
   }
   if (state.lightboxIndex === -1) {
-    // Compare view open, no lightbox: K keeps the group's best (B = legacy alias).
-    if (
-      state.compareBurstId &&
-      ['k', 'b'].includes(event.key.toLowerCase()) &&
-      el('bbKeepBest').style.visibility === 'visible'
-    ) {
-      el('bbKeepBest').click();
+    if (state.compareBurstId) {
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        stepBurstbox(-1);
+        return;
+      }
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        stepBurstbox(1);
+        return;
+      }
+      // Compare view open, no lightbox: K keeps the group's best (B = legacy alias).
+      if (
+        ['k', 'b'].includes(event.key.toLowerCase()) &&
+        el('bbKeepBest').style.visibility === 'visible'
+      ) {
+        el('bbKeepBest').click();
+      }
+      return;
+    }
+    // Main grid: if photos are selected, hotkeys apply to the selected group
+    if (state.selected.size > 0) {
+      const bulkKeys = { a: 'approve', y: 'approve', r: 'reject', n: 'reject', f: 'favorite', s: 'reviewed', v: 'reviewed' };
+      const action = bulkKeys[event.key.toLowerCase()];
+      if (action) {
+        event.preventDefault();
+        decide(action, [...state.selected], { undoable: false });
+        return;
+      }
     }
     return;
   }
