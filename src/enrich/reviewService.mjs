@@ -209,15 +209,84 @@ export class ReviewService {
       const inViewStack = (row) => Boolean(row.burstId) && (visibleMembers.get(row.burstId) ?? 0) >= 2;
       filtered = filtered.filter((row) => inViewStack(row) === (group === 'stacks'));
     }
+    const sort = first(query, 'sort', 'default');
     const bucketConfig = config.buckets.find((bucket) => bucket.id === view);
-    if (view === 'decided') {
+    if (sort === 'date_desc') {
+      filtered.sort((left, right) => {
+        const a = left.capturedAt ? String(left.capturedAt) : '';
+        const b = right.capturedAt ? String(right.capturedAt) : '';
+        if (a && b) return b.localeCompare(a);
+        if (a) return -1;
+        if (b) return 1;
+        return 0;
+      });
+    } else if (sort === 'date_asc') {
+      filtered.sort((left, right) => {
+        const a = left.capturedAt ? String(left.capturedAt) : '';
+        const b = right.capturedAt ? String(right.capturedAt) : '';
+        if (a && b) return a.localeCompare(b);
+        if (a) return 1;
+        if (b) return -1;
+        return 0;
+      });
+    } else if (sort === 'score_desc') {
+      filtered.sort((left, right) => {
+        const aScore = typeof left.frameScore === 'number' ? left.frameScore : null;
+        const bScore = typeof right.frameScore === 'number' ? right.frameScore : null;
+        if (aScore !== null && bScore !== null) {
+          if (aScore !== bScore) return bScore - aScore;
+          const aAes = typeof left.aestheticScore === 'number' ? left.aestheticScore : 0;
+          const bAes = typeof right.aestheticScore === 'number' ? right.aestheticScore : 0;
+          return bAes - aAes;
+        }
+        if (aScore !== null) return -1;
+        if (bScore !== null) return 1;
+        return 0;
+      });
+    } else if (sort === 'score_asc') {
+      filtered.sort((left, right) => {
+        const aScore = typeof left.frameScore === 'number' ? left.frameScore : null;
+        const bScore = typeof right.frameScore === 'number' ? right.frameScore : null;
+        if (aScore !== null && bScore !== null) {
+          if (aScore !== bScore) return aScore - bScore;
+          const aAes = typeof left.aestheticScore === 'number' ? left.aestheticScore : 0;
+          const bAes = typeof right.aestheticScore === 'number' ? right.aestheticScore : 0;
+          return aAes - bAes;
+        }
+        if (aScore !== null) return -1;
+        if (bScore !== null) return 1;
+        return 0;
+      });
+    } else if (sort === 'stack_desc') {
+      const burstCounts = new Map();
+      for (const row of filtered) {
+        if (row.burstId) {
+          burstCounts.set(row.burstId, (burstCounts.get(row.burstId) ?? 0) + 1);
+        }
+      }
+      filtered.sort((left, right) => {
+        const countA = left.burstId ? (burstCounts.get(left.burstId) ?? 1) : 1;
+        const countB = right.burstId ? (burstCounts.get(right.burstId) ?? 1) : 1;
+        if (countA !== countB) return countB - countA;
+        const scoreA = typeof left.frameScore === 'number' ? left.frameScore : -1;
+        const scoreB = typeof right.frameScore === 'number' ? right.frameScore : -1;
+        return scoreB - scoreA;
+      });
+    } else if (sort === 'name_asc') {
+      filtered.sort((left, right) =>
+        String(left.filename ?? '').localeCompare(String(right.filename ?? '')),
+      );
+    } else if (view === 'decided') {
       filtered.sort((left, right) => String(right.finishedAt ?? '').localeCompare(String(left.finishedAt ?? '')));
     } else {
       filtered.sort(bucketSortComparator(bucketConfig ?? config.buckets.at(-1)));
-      // Stacks render as one card, so a group must never straddle a page:
-      // cluster members behind their best-ranked member, and let the page
-      // run past the limit to finish the group it ends inside.
-      if (grouping) filtered = clusterBursts(filtered);
+    }
+
+    // Stacks render as one card, so a group must never straddle a page:
+    // cluster members behind their best-ranked member, and let the page
+    // run past the limit to finish the group it ends inside.
+    if (view !== 'decided' && grouping) {
+      filtered = clusterBursts(filtered);
     }
 
     const offset = Math.max(0, intFirst(query, 'offset', 0));
@@ -233,6 +302,7 @@ export class ReviewService {
     }
     return {
       view,
+      sort,
       buckets: displayBuckets.map((bucket) => ({
         id: bucket.id,
         label: bucket.label,

@@ -17,6 +17,7 @@ const state = {
   loadingPromise: null,
   immichUrl: null,
   unstacked: false,
+  sort: 'default',
   // Decisions made this session (per view load): appended pages are filtered
   // against this so a fetch that raced a decision can't resurrect the photo.
   recentlyDecided: new Set(),
@@ -28,10 +29,23 @@ const state = {
 const LOAD_AHEAD = 25;
 const UNDO_WINDOW_MS = 5000;
 
-// Page-size override for tests and power users: /curate.html?limit=5.
+// Page-size override and persistent sort preference: /curate.html?sort=date_desc&limit=5.
 {
-  const urlLimit = Number(new URLSearchParams(location.search).get('limit'));
+  const urlParams = new URLSearchParams(location.search);
+  const urlLimit = Number(urlParams.get('limit'));
   if (urlLimit > 0) state.limit = Math.min(urlLimit, 400);
+
+  const VALID_SORTS = ['default', 'date_desc', 'date_asc', 'score_desc', 'score_asc', 'stack_desc', 'name_asc'];
+  const urlSort = urlParams.get('sort');
+  let savedSort = null;
+  try {
+    savedSort = localStorage.getItem('pictariaCurateSort');
+  } catch {}
+  if (VALID_SORTS.includes(urlSort)) {
+    state.sort = urlSort;
+  } else if (VALID_SORTS.includes(savedSort)) {
+    state.sort = savedSort;
+  }
 }
 
 const el = (id) => document.getElementById(id);
@@ -68,6 +82,7 @@ function loadAssets(append = false) {
 async function doLoadAssets(append) {
   try {
     const params = new URLSearchParams({ view: state.view, q: state.q, offset: String(state.offset), limit: String(state.limit) });
+    if (state.sort && state.sort !== 'default') params.set('sort', state.sort);
     if (state.group !== 'all' && state.view !== 'decided') params.set('group', state.group);
     const payload = await api(`/api/review/assets?${params}`);
     state.total = payload.total;
@@ -178,6 +193,21 @@ function renderGrid() {
       if (state.unstacked) {
         // Unstacked view: keep all members of the same stack together sequentially
         const sortedMembers = [...members].sort((a, b) => {
+          if (state.sort === 'date_asc') {
+            return String(a.capturedAt ?? '').localeCompare(String(b.capturedAt ?? ''));
+          }
+          if (state.sort === 'date_desc') {
+            return String(b.capturedAt ?? '').localeCompare(String(a.capturedAt ?? ''));
+          }
+          if (state.sort === 'score_asc') {
+            const scoreA = typeof a.frameScore === 'number' ? a.frameScore : null;
+            const scoreB = typeof b.frameScore === 'number' ? b.frameScore : null;
+            if (scoreA !== null && scoreB !== null && scoreA !== scoreB) return scoreA - scoreB;
+            return (a.aestheticScore ?? 0) - (b.aestheticScore ?? 0);
+          }
+          if (state.sort === 'name_asc') {
+            return String(a.filename ?? '').localeCompare(String(b.filename ?? ''));
+          }
           if (a.assetId === a.burstBestAssetId) return -1;
           if (b.assetId === b.burstBestAssetId) return 1;
           return 0;
@@ -205,7 +235,9 @@ function renderGrid() {
       units.push({ cards: [renderCard(asset)], gold: false });
     }
   }
-  units.sort((a, b) => Number(b.gold) - Number(a.gold)); // stable: keeps queue order within each half
+  if (state.sort === 'default') {
+    units.sort((a, b) => Number(b.gold) - Number(a.gold)); // stable: keeps queue order within each half
+  }
   for (const unit of units) {
     for (const card of unit.cards) {
       grid.append(card);
@@ -1197,6 +1229,17 @@ if (toggleStackBtn) {
     toggleStackBtn.classList.toggle('accent', state.unstacked);
     toggleStackBtn.classList.toggle('quiet', !state.unstacked);
     renderGrid();
+  });
+}
+const curateSort = el('curateSort');
+if (curateSort) {
+  curateSort.value = state.sort;
+  curateSort.addEventListener('change', () => {
+    state.sort = curateSort.value;
+    try {
+      localStorage.setItem('pictariaCurateSort', state.sort);
+    } catch {}
+    loadAssetsFresh();
   });
 }
 el('selectVisible').addEventListener('change', () => {
